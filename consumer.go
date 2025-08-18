@@ -9,15 +9,6 @@ import (
 	"golang.org/x/sync/errgroup"
 )
 
-type Queue struct {
-	Name       string
-	Durable    bool
-	AutoDelete bool
-	Exclusive  bool
-	NoWait     bool
-	Args       amqp.Table
-}
-
 type UpdatesFn func(ctx context.Context, d amqp.Delivery) error
 
 type Consumer struct {
@@ -129,7 +120,7 @@ func declareQueues(channel *amqp.Channel, queue Queue, backoffIntervals []int64)
 		currentDLX = makeDLXName(queue.Name)
 	)
 
-	if err := declareQueueWithTTLAndDLX(channel, queue, currentDLX, 0); err != nil {
+	if err := queue.DeclareQueue(channel, WithDLX(currentDLX), WithTTL(0)); err != nil {
 		return nil, fmt.Errorf("declare main queue: %w", err)
 	}
 
@@ -137,16 +128,16 @@ func declareQueues(channel *amqp.Channel, queue Queue, backoffIntervals []int64)
 
 	for _, interval := range backoffIntervals {
 		var (
-			backoffQueue = makeBackoffQueueName(queue.Name, interval)
-			backoffDLX   = makeDLXName(backoffQueue)
+			backoffQueueName = makeBackoffQueueName(queue.Name, interval)
+			backoffDLX       = makeDLXName(backoffQueueName)
+			backoffQueue     = copyQueueParams(backoffQueueName, queue)
 		)
 
-		if err := declareAndBindQueue(
+		if err := backoffQueue.DeclareQueue(
 			channel,
-			copyQueueParams(backoffQueue, queue),
-			backoffDLX,
-			interval,
-			currentDLX,
+			WithDLX(backoffDLX),
+			WithTTL(interval),
+			WithBind(currentDLX),
 		); err != nil {
 			return nil, fmt.Errorf("declare and bind queue: %w", err)
 		}
@@ -154,14 +145,13 @@ func declareQueues(channel *amqp.Channel, queue Queue, backoffIntervals []int64)
 		var (
 			consumableBackoffQueue = makeConsumableBackoffQueueName(queue.Name, interval)
 			consumableBackoffDLX   = makeDLXName(consumableBackoffQueue)
+			consumableQueue        = copyQueueParams(consumableBackoffQueue, queue)
 		)
 
-		if err := declareAndBindQueue(
+		if err := consumableQueue.DeclareQueue(
 			channel,
-			copyQueueParams(consumableBackoffQueue, queue),
-			consumableBackoffDLX,
-			0,
-			backoffDLX,
+			WithDLX(consumableBackoffDLX),
+			WithBind(backoffDLX),
 		); err != nil {
 			return nil, fmt.Errorf("declare and bind queue: %w", err)
 		}
@@ -184,29 +174,6 @@ func copyQueueParams(name string, queue Queue) Queue {
 	}
 }
 
-func declareAndBindQueue(
-	channel *amqp.Channel,
-	queue Queue,
-	backoffDLX string,
-	backoffInterval int64,
-	exchangeToSubscribe string,
-) error {
-	if err := declareQueueWithTTLAndDLX(
-		channel,
-		queue,
-		backoffDLX,
-		backoffInterval,
-	); err != nil {
-		return fmt.Errorf("create backoff queue: %w", err)
-	}
-
-	if err := channel.QueueBind(queue.Name, "", exchangeToSubscribe, false, nil); err != nil {
-		return fmt.Errorf("bind queue %s: %w", queue.Name, err)
-	}
-
-	return nil
-}
-
 func makeDLXName(queueName string) string {
 	return fmt.Sprintf("%s_dlx", queueName)
 }
@@ -217,43 +184,4 @@ func makeBackoffQueueName(queueName string, backoffInterval int64) string {
 
 func makeConsumableBackoffQueueName(queueName string, backoffInterval int64) string {
 	return fmt.Sprintf("%s_%d_consume", queueName, backoffInterval)
-}
-
-func declareQueueWithTTLAndDLX(channel *amqp.Channel, queue Queue, dlx string, ttl int64) error {
-	if err := channel.ExchangeDeclare(
-		dlx,
-		"fanout",
-		queue.Durable,
-		queue.AutoDelete,
-		false,
-		queue.NoWait,
-		nil,
-	); err != nil {
-		return fmt.Errorf("exchange declare %s: %w", dlx, err)
-	}
-
-	if queue.Args == nil {
-		queue.Args = make(amqp.Table)
-	}
-
-	if dlx != "" {
-		queue.Args["x-dead-letter-exchange"] = dlx
-	}
-
-	if ttl > 0 {
-		queue.Args["x-message-ttl"] = ttl
-	}
-
-	if _, err := channel.QueueDeclare(
-		queue.Name,
-		queue.Durable,
-		queue.AutoDelete,
-		queue.Exclusive,
-		queue.NoWait,
-		queue.Args,
-	); err != nil {
-		return fmt.Errorf("queue declare %s: %w", queue.Name, err)
-	}
-
-	return nil
 }
