@@ -9,13 +9,16 @@ import (
 	"golang.org/x/sync/errgroup"
 )
 
+// UpdatesFn message processing func. This function invokes message processing worker.
 type UpdatesFn func(ctx context.Context, d amqp.Delivery) error
 
+// Consumer responsible for declaring queues and exchanges for backoff logic.
 type Consumer struct {
 	channel *amqp.Channel
 	queues  []string
 }
 
+// NewConsumer constructor for consumer, also declares main and backoff queues.
 func NewConsumer(
 	channel *amqp.Channel,
 	queue Queue,
@@ -32,6 +35,7 @@ func NewConsumer(
 	}, nil
 }
 
+// Consume start consuming messages from main and backoff queues.
 func (c *Consumer) Consume(
 	ctx context.Context,
 	workersCount int,
@@ -56,6 +60,7 @@ func (c *Consumer) Consume(
 	return nil
 }
 
+// runWorkers run workers for processing messages, each worker execute updatesFn func.
 func runWorkers(
 	ctx context.Context,
 	count int,
@@ -80,6 +85,7 @@ func runWorkers(
 	return &wgWorker
 }
 
+// runConsumers run goroutines for dispatch messages for each consumable queues.
 func (c *Consumer) runConsumers(
 	ctx context.Context,
 	msgChan chan amqp.Delivery,
@@ -95,6 +101,7 @@ func (c *Consumer) runConsumers(
 	return wgConsume, ctx
 }
 
+// consumeMessages dispatch messages from channel and forward to msgChan for further worker processing.
 func (c *Consumer) consumeMessages(
 	ctx context.Context,
 	queue string,
@@ -174,14 +181,17 @@ func copyQueueParams(name string, queue Queue) Queue {
 	}
 }
 
+// makeDLXName creates deadletter queue name based on original queue name.
 func makeDLXName(queueName string) string {
 	return fmt.Sprintf("%s_dlx", queueName)
 }
 
+// makeBackoffQueueName creates backoff queue name based on original queue name and backoff interval.
 func makeBackoffQueueName(queueName string, backoffInterval int64) string {
 	return fmt.Sprintf("%s_%d", queueName, backoffInterval)
 }
 
+// makeConsumableBackoffQueueName creates consumable queue name based on origin queue and backoff interval.
 func makeConsumableBackoffQueueName(queueName string, backoffInterval int64) string {
 	return fmt.Sprintf("%s_%d_consume", queueName, backoffInterval)
 }

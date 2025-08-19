@@ -23,24 +23,29 @@ type queueOptions struct {
 
 type Option func(opts *queueOptions)
 
+// WithDLX option for deadletter exchange name.
 func WithDLX(dlx string) Option {
 	return func(opts *queueOptions) {
 		opts.DLX = dlx
 	}
 }
 
+// WithTTL option for time to live queue messages.
 func WithTTL(ttl int64) Option {
 	return func(opts *queueOptions) {
 		opts.TTL = ttl
 	}
 }
 
+// WithBind option for exchange name which queue should binding after declaring.
 func WithBind(exchange string) Option {
 	return func(opts *queueOptions) {
 		opts.ExchangeToSubscribe = exchange
 	}
 }
 
+// DeclareQueue declare queue with options.
+// bind to exhange if WithBind option is specified.
 func (q *Queue) DeclareQueue(
 	channel *amqp.Channel,
 	opts ...Option,
