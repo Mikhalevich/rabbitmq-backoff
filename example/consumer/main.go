@@ -57,10 +57,12 @@ func main() {
 
 	err = consumer.Consume(
 		context.Background(), workersCount,
-		func(ctx context.Context, d amqp.Delivery) error {
-			log.Printf("received: %s time: %s", string(d.Body), time.Now().Format(time.TimeOnly))
+		func(ctx context.Context, msg *rabbitmqbackoff.Message) {
+			log.Printf("received: %s time: %s", string(msg.Payload()), time.Now().Format(time.TimeOnly))
 
-			return d.Nack(false, false)
+			if err := msg.Requeue(); err != nil {
+				log.Printf("failed to requeue message: %v", err)
+			}
 		},
 	)
 	panicOnError(err, "failed to consume messages")

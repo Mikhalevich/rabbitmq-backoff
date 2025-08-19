@@ -10,7 +10,7 @@ import (
 )
 
 // UpdatesFn message processing func. This function invokes message processing worker.
-type UpdatesFn func(ctx context.Context, d amqp.Delivery) error
+type UpdatesFn func(ctx context.Context, msg *Message)
 
 // Consumer responsible for declaring queues and exchanges for backoff logic.
 type Consumer struct {
@@ -75,9 +75,17 @@ func runWorkers(
 		go func() {
 			defer wgWorker.Done()
 
-			for msg := range msgChan {
-				//nolint:errcheck
-				updatesFn(ctx, msg)
+			for delivery := range msgChan {
+				msg := Message{
+					delivery: delivery,
+				}
+
+				updatesFn(ctx, &msg)
+
+				if !msg.isProcessed {
+					//nolint:errcheck
+					msg.Ack()
+				}
 			}
 		}()
 	}
