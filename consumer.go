@@ -152,7 +152,19 @@ func declareQueuesByInfo(channel *amqp.Channel, queues []declareQueueInfo) error
 
 // consumableQueueNames returns queue names for consuming messages from it.
 func consumableQueueNames(queues []declareQueueInfo) []string {
-	names := make([]string, 0, len(queues))
+	consumableCount := 0
+
+	for _, queue := range queues {
+		if queue.TTL == 0 {
+			consumableCount++
+		}
+	}
+
+	if consumableCount == 0 {
+		return nil
+	}
+
+	names := make([]string, 0, consumableCount)
 
 	for _, queue := range queues {
 		if queue.TTL == 0 {
@@ -169,7 +181,7 @@ func consumableQueueNames(queues []declareQueueInfo) []string {
 // resturns slace of consumable declared queues.
 func makeQueues(channel *amqp.Channel, queue Queue, backoffIntervals []int64) ([]string, error) {
 	var (
-		queueInfos = make([]declareQueueInfo, 0, len(backoffIntervals)+1)
+		queueInfos = make([]declareQueueInfo, 0, len(backoffIntervals)*2+1)
 		currentDLX = makeDLXName(queue.Name)
 	)
 
