@@ -24,7 +24,7 @@ func NewConsumer(
 	queue Queue,
 	backoffIntervals []int64,
 ) (*Consumer, error) {
-	queues, err := declareQueues(channel, queue, backoffIntervals)
+	queues, err := makeQueues(channel, queue, backoffIntervals)
 	if err != nil {
 		return nil, fmt.Errorf("declare queues: %w", err)
 	}
@@ -127,19 +127,56 @@ func (c *Consumer) consumeMessages(
 	return nil
 }
 
-// declareQueues declare main and backoff queues
-// resturns slace of declared queues.
-func declareQueues(channel *amqp.Channel, queue Queue, backoffIntervals []int64) ([]string, error) {
+type declareQueueInfo struct {
+	Queue               Queue
+	DLX                 string
+	TTL                 int64
+	ExchangeToSubscribe string
+}
+
+// declareQueuesByInfo declare queues by declareQueueInfo.
+func declareQueuesByInfo(channel *amqp.Channel, queues []declareQueueInfo) error {
+	for _, queue := range queues {
+		if err := queue.Queue.DeclareQueue(
+			channel,
+			WithDLX(queue.DLX),
+			WithTTL(queue.TTL),
+			WithBind(queue.ExchangeToSubscribe),
+		); err != nil {
+			return fmt.Errorf("declare queue %s: %w", queue.Queue.Name, err)
+		}
+	}
+
+	return nil
+}
+
+// consumableQueueNames returns queue names for consuming messages from it.
+func consumableQueueNames(queues []declareQueueInfo) []string {
+	names := make([]string, 0, len(queues))
+
+	for _, queue := range queues {
+		if queue.TTL == 0 {
+			names = append(names, queue.Queue.Name)
+		}
+	}
+
+	return names
+}
+
+// makeQueues declare main and backoff queues
+// generates names for backoff queues based on backoffIntervals
+// for each interval declaring two queues (backoff and for consuption)
+// resturns slace of consumable declared queues.
+func makeQueues(channel *amqp.Channel, queue Queue, backoffIntervals []int64) ([]string, error) {
 	var (
-		queueNames = make([]string, 0, len(backoffIntervals)+1)
+		queueInfos = make([]declareQueueInfo, 0, len(backoffIntervals)+1)
 		currentDLX = makeDLXName(queue.Name)
 	)
 
-	if err := queue.DeclareQueue(channel, WithDLX(currentDLX), WithTTL(0)); err != nil {
-		return nil, fmt.Errorf("declare main queue: %w", err)
-	}
-
-	queueNames = append(queueNames, queue.Name)
+	queueInfos = append(queueInfos, declareQueueInfo{
+		Queue: queue,
+		DLX:   currentDLX,
+	})
 
 	for _, interval := range backoffIntervals {
 		var (
@@ -148,14 +185,12 @@ func declareQueues(channel *amqp.Channel, queue Queue, backoffIntervals []int64)
 			backoffQueue     = copyQueueParams(backoffQueueName, queue)
 		)
 
-		if err := backoffQueue.DeclareQueue(
-			channel,
-			WithDLX(backoffDLX),
-			WithTTL(interval),
-			WithBind(currentDLX),
-		); err != nil {
-			return nil, fmt.Errorf("declare and bind queue: %w", err)
-		}
+		queueInfos = append(queueInfos, declareQueueInfo{
+			Queue:               backoffQueue,
+			DLX:                 backoffDLX,
+			TTL:                 interval,
+			ExchangeToSubscribe: currentDLX,
+		})
 
 		var (
 			consumableBackoffQueue = makeConsumableBackoffQueueName(queue.Name, interval)
@@ -163,20 +198,20 @@ func declareQueues(channel *amqp.Channel, queue Queue, backoffIntervals []int64)
 			consumableQueue        = copyQueueParams(consumableBackoffQueue, queue)
 		)
 
-		if err := consumableQueue.DeclareQueue(
-			channel,
-			WithDLX(consumableBackoffDLX),
-			WithBind(backoffDLX),
-		); err != nil {
-			return nil, fmt.Errorf("declare and bind queue: %w", err)
-		}
+		queueInfos = append(queueInfos, declareQueueInfo{
+			Queue:               consumableQueue,
+			DLX:                 consumableBackoffDLX,
+			ExchangeToSubscribe: backoffDLX,
+		})
 
 		currentDLX = consumableBackoffDLX
-
-		queueNames = append(queueNames, consumableBackoffQueue)
 	}
 
-	return queueNames, nil
+	if err := declareQueuesByInfo(channel, queueInfos); err != nil {
+		return nil, fmt.Errorf("declare queues: %w", err)
+	}
+
+	return consumableQueueNames(queueInfos), nil
 }
 
 func copyQueueParams(name string, queue Queue) Queue {
